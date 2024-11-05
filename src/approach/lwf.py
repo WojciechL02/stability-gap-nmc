@@ -15,19 +15,19 @@ class Appr(Inc_Learning_Appr):
     # Weight decay of 0.0005 is used in the original article (page 4).
     # Page 4: "The warm-up step greatly enhances fine-tuning’s old-task performance, but is not so crucial to either our
     #  method or the compared Less Forgetting Learning (see Table 2(b))."
-    def __init__(self, model, device, nepochs=100, lr=0.05, lr_min=1e-4, lr_factor=3, lr_patience=5, clipgrad=10000,
+    def __init__(self, model, device, classifier="linear", nepochs=100, lr=0.05, lr_min=1e-4, lr_factor=3, lr_patience=5, clipgrad=10000,
                  momentum=0, wd=0, multi_softmax=False, wu_nepochs=0, wu_lr=1e-1, wu_fix_bn=False,
                  wu_scheduler='constant', wu_patience=None, wu_wd=0., fix_bn=False, eval_on_train=False,
                  select_best_model_by_val_loss=True, logger=None, exemplars_dataset=None, scheduler_milestones=False,
                  lamb=1, T=2, mc=False, taskwise_kd=False,
                  ta=False,
                  cka=False, debug_loss=False,
-                 tp=False, ctt=False, bnp=False, cbnt=False, pretraining_epochs=5, ta_lr=1e-5,
+                 tp=False, ctt=False, bnp=False, cbnt=False, pretraining_epochs=5, ta_lr=1e-5, slca=False
                  ):
-        super(Appr, self).__init__(model, device, nepochs, lr, lr_min, lr_factor, lr_patience, clipgrad, momentum, wd,
+        super(Appr, self).__init__(model, device, classifier, nepochs, lr, lr_min, lr_factor, lr_patience, clipgrad, momentum, wd,
                                    multi_softmax, wu_nepochs, wu_lr, wu_fix_bn, wu_scheduler, wu_patience, wu_wd,
                                    fix_bn, eval_on_train, select_best_model_by_val_loss, logger, exemplars_dataset,
-                                   scheduler_milestones)
+                                   scheduler_milestones, slca=slca)
         self.model_old = None
         self.lamb = lamb
         self.T = T
@@ -153,6 +153,9 @@ class Appr(Inc_Learning_Appr):
         super().train_loop(t, trn_loader, val_loader)
         self.training = False
 
+        # UPDATE PROTOTYPES
+        self.classifier.prototypes_update(t, trn_loader, val_loader.dataset.transform)
+
         # EXEMPLAR MANAGEMENT -- select training subset
         self.exemplars_dataset.collect_exemplars(self.model, trn_loader, val_loader.dataset.transform)
 
@@ -212,6 +215,8 @@ class Appr(Inc_Learning_Appr):
         if self.scheduler is not None:
             self.scheduler.step()
 
+        self.classifier.prototypes_update(t, trn_loader, self.val_loader_transform)
+
     def eval(self, t, val_loader, log_partial_loss=False):
         """Contains the evaluation code"""
         with torch.no_grad():
@@ -228,9 +233,10 @@ class Appr(Inc_Learning_Appr):
                 if t > 0:
                     targets_old = self.model_old(images)
                 # Forward current model
-                outputs = self.model(images)
+                outputs, feats = self.model(images, return_features=True)
                 loss, loss_kd, loss_ce = self.criterion(t, outputs, targets, targets_old, return_partial_losses=True)
-                hits_taw, hits_tag = self.calculate_metrics(outputs, targets)
+                # hits_taw, hits_tag = self.calculate_metrics(outputs, targets)
+                hits_taw, hits_tag = self.classifier.classify(t, outputs, feats, targets)
                 # Log
                 total_loss += loss.data.cpu().numpy().item() * len(targets)
                 total_loss_kd += loss_kd.data.cpu().numpy().item() * len(targets)

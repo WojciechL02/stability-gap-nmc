@@ -98,6 +98,8 @@ def main(argv=None):
                         help='Mode of new head weights initialization (default=%(default)s)')
     parser.add_argument('--pretrained', action='store_true',
                         help='Use pretrained backbone (default=%(default)s)')
+    parser.add_argument('--projector-type', default="mlp", type=str, required=False, choices=["mlp", "linear"],
+                        help='Use pretrained backbone (default=%(default)s)')
     # training args
     parser.add_argument('--approach', default='finetuning', type=str, choices=approach.__all__,
                         help='Learning approach used (default=%(default)s)', metavar="APPROACH")
@@ -143,6 +145,10 @@ def main(argv=None):
                         help='Additional data augmentations (default=%(default)s)')
     parser.add_argument('--reset-backbone', action='store_true',
                         help='Reset backbone weights between tasks ((default=%(default)s))')
+    parser.add_argument('--classifier', default="linear", required=False, choices=['linear', 'nmc'],
+                        help='Classification head strategy (default=%(default)s)')
+    parser.add_argument('--best_prototypes', action='store_true',
+                        help='Calculate prototypes on full trainset (default=%(default)s)')
     parser.add_argument('--slca', action='store_true',
                         help='Training with SLCA ((default=%(default)s))')
 
@@ -152,9 +158,8 @@ def main(argv=None):
 
     # Args -- Incremental Learning Framework
     args, extra_args = parser.parse_known_args(argv)
-    print(args.slca)
     args.results_path = os.path.expanduser(args.results_path)
-    base_kwargs = dict(nepochs=args.nepochs, lr=args.lr, lr_min=args.lr_min, lr_factor=args.lr_factor,
+    base_kwargs = dict(classifier=args.classifier, nepochs=args.nepochs, lr=args.lr, lr_min=args.lr_min, lr_factor=args.lr_factor,
                        lr_patience=args.lr_patience, clipgrad=args.clipping, momentum=args.momentum,
                        wd=args.weight_decay, multi_softmax=args.multi_softmax, wu_nepochs=args.wu_nepochs,
                        wu_lr=args.wu_lr, wu_fix_bn=args.wu_fix_bn, wu_scheduler=args.wu_scheduler,
@@ -192,6 +197,7 @@ def main(argv=None):
 
     # Args -- Network
     from networks.network import LLL_Net
+    from networks.ssl_network import SSL_Net
     if args.network in tvmodels:  # torchvision models
         tvnet = getattr(importlib.import_module(name='torchvision.models'), args.network)
         if args.network == 'googlenet':
@@ -273,8 +279,11 @@ def main(argv=None):
 
     # Network and Approach instances
     utils.seed_everything(seed=args.seed)
-    use_ssl_projector = True if args.approach in ["supcon", "mixed"] else False
-    net = LLL_Net(init_model, remove_existing_head=not args.keep_existing_head, head_init_mode=args.head_init_mode, use_ssl_projector=use_ssl_projector)
+
+    if args.approach in ["supcon", "mixed"]:
+        net = SSL_Net(init_model, remove_existing_head=not args.keep_existing_head, head_init_mode=args.head_init_mode, projector_type=args.projector_type)
+    else:
+        net = LLL_Net(init_model, remove_existing_head=not args.keep_existing_head, head_init_mode=args.head_init_mode)
     utils.seed_everything(seed=args.seed)
     # taking transformations and class indices from first train dataset
     first_train_ds = trn_loader[0].dataset

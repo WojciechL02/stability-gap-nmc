@@ -16,7 +16,7 @@ from . import base_dataset as basedat
 from . import memory_dataset as memd
 from .dataset_config import dataset_config
 from .autoaugment import CIFAR10Policy, ImageNetPolicy
-from .ops import Cutout
+from .ops import Cutout, TwoCropTransform
 
 
 def get_loaders(datasets, num_tasks, nc_first_task, nc_per_task, batch_size, num_workers,
@@ -346,6 +346,9 @@ def get_transforms(resize, test_resize, pad, crop, flip, normalize, extend_chann
             lambda x: x.repeat(extend_channel, 1, 1)))
         tst_transform_list.append(transforms.Lambda(
             lambda x: x.repeat(extend_channel, 1, 1)))
+
+    if "simclr" in extra_aug:
+        return TwoCropTransform(transforms.Compose(trn_transform_list)), transforms.Compose(tst_transform_list)
 
     return transforms.Compose(trn_transform_list), \
         transforms.Compose(tst_transform_list)

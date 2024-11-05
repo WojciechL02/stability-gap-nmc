@@ -9,16 +9,18 @@ import pandas as pd
 
 from loggers.exp_logger import ExperimentLogger
 from datasets.exemplars_dataset import ExemplarsDataset
+from .classifiers.classifier_factory import ClassifierFactory
+from .classifiers.nmc import NMC
 
 
 class Inc_Learning_Appr:
     """Basic class for implementing incremental learning approaches"""
 
-    def __init__(self, model, device, nepochs=100, lr=0.05, lr_min=1e-4, lr_factor=3, lr_patience=5, clipgrad=10000,
+    def __init__(self, model, device, classifier="linear", nepochs=100, lr=0.05, lr_min=1e-4, lr_factor=3, lr_patience=5, clipgrad=10000,
                  momentum=0, wd=0, multi_softmax=False, wu_nepochs=0, wu_lr=1e-1, wu_fix_bn=False,
                  wu_scheduler='constant', wu_patience=None, wu_wd=0., fix_bn=False,
                  eval_on_train=False, select_best_model_by_val_loss=True, logger: ExperimentLogger = None,
-                 exemplars_dataset: ExemplarsDataset = None, scheduler_milestones=False, no_learning=False, log_grad_norm=True, slca=False):
+                 exemplars_dataset: ExemplarsDataset = None, scheduler_milestones=False, no_learning=False, log_grad_norm=True, best_prototypes=False, slca=False):
         self.model = model
         self.device = device
         self.nepochs = nepochs
@@ -47,10 +49,12 @@ class Inc_Learning_Appr:
         self.scheduler = None
         self.debug = False
         self.no_learning = no_learning
+        self.classifier = ClassifierFactory.create_classifier(classifier, device, self.model, self.exemplars_dataset, best_prototypes, multi_softmax)
+        self.val_loader_transform = None
 
-        self.last_e_accs = None # variable for stability-gap metric
+        self.last_e_accs = None  # variable for stability-gap metric
         self.log_grad_norm = False
-        self.projector = None # UMAP
+        self.projector = None  # UMAP
         self.slca = slca
 
     @staticmethod
@@ -68,7 +72,7 @@ class Inc_Learning_Appr:
 
     def _get_optimizer(self):
         """Returns the optimizer"""
-        if self.slca: # and len(self.model.heads) > 1:
+        if self.slca:  # and len(self.model.heads) > 1:
             backbone_params = {'params': self.model.model.parameters(), 'lr': self.lr * 0.1}
             head_params = {'params': self.model.heads.parameters()}
             network_params = [backbone_params, head_params]
@@ -81,7 +85,7 @@ class Inc_Learning_Appr:
             return torch.optim.lr_scheduler.LinearLR(optimizer=self.optimizer, start_factor=1.0, end_factor=0.01, total_iters=self.nepochs)
         else:
             return None
-    
+
     def get_embeddings(self, t):
         loaders = self.tst_loader[:t + 1]
         self.model.eval()
@@ -265,7 +269,7 @@ class Inc_Learning_Appr:
                 for images, targets in loader:
                     images, targets = images.to(self.device), targets.to(self.device)
                     outputs = self.model(images)
-                    hits_taw, hits_tag = self.calculate_metrics(outputs, targets)
+                    hits_taw, hits_tag = self.classifier.classify(t, outputs, targets)
                     ce_taw = torch.nn.functional.cross_entropy(outputs[i], targets - self.model.task_offset[i],
                                                                reduction='sum')
                     ce_tag = torch.nn.functional.cross_entropy(torch.cat(outputs, dim=1), targets, reduction='sum')
@@ -320,22 +324,33 @@ class Inc_Learning_Appr:
                 for images, targets in loader:
                     images, targets = images.to(self.device), targets.to(self.device)
                     # Forward current model
-                    outputs = self.model(images)
-                    hits_taw, hits_tag = self.calculate_metrics(outputs, targets)
+                    outputs, feats = self.model(images, return_features=True)
+
+                    if task_id == t:
+                        loss = self.criterion(task_id, outputs, targets)
+                        total_loss_curr += loss.item() * len(targets)
+                        total_num_curr += total_num
+
+                    outputs_stacked = torch.stack(outputs, dim=1)
+                    shape = outputs_stacked.shape
+                    hits_taw, hits_tag, outputs = self.classifier.classify(task_id, outputs, feats, targets, return_dists=True)
                     # Log
                     total_acc_tag += hits_tag.sum().data.cpu().numpy().item()
                     total_acc_taw += hits_taw.sum().data.cpu().numpy().item()
                     total_num += len(targets)
 
-                    if task_id == t:
-                        loss = self.criterion(t, outputs, targets)
-                        total_loss_curr += loss.item() * len(targets)
-                        total_num_curr += total_num
-                    
-                    outputs = torch.stack(outputs, dim=1)
-                    outputs = torch.max(outputs, dim=-1)[0]
-                    task_ids.extend(outputs.argmax(dim=-1).tolist())
-                
+                    ### TO JEST DO ROZWAŻENIA ######################
+                    if isinstance(self.classifier, NMC):
+                        outputs = outputs.view(shape[0], shape[1], shape[2])
+                        outputs = torch.min(outputs, dim=-1)[0]
+                        outputs = outputs.argmin(dim=-1)
+                        task_ids.extend(outputs.tolist())
+                    else:
+                        outputs = torch.stack(outputs, dim=1)
+                        outputs = torch.max(outputs, dim=-1)[0]
+                        task_ids.extend(outputs.argmax(dim=-1).tolist())
+                    ###############################################
+
                 counts = Counter(task_ids)
                 for j, val in counts.items():
                     confusion_matrix[task_id, j] = val / len(loader.dataset)
@@ -375,6 +390,7 @@ class Inc_Learning_Appr:
 
     def train_loop(self, t, trn_loader, val_loader):
         """Contains the epochs loop"""
+        self.val_loader_transform = val_loader.dataset.transform
         lr = self.lr
         best_loss = np.inf
         patience = self.lr_patience
@@ -586,6 +602,9 @@ class Inc_Learning_Appr:
         if self.scheduler is not None:
             self.scheduler.step()
 
+        # compute mean of exemplars on every epoch
+        self.classifier.prototypes_update(t, trn_loader, self.val_loader_transform)
+
     def eval(self, t, val_loader, log_partial_loss=False):
         """Contains the evaluation code"""
         with torch.no_grad():
@@ -595,11 +614,11 @@ class Inc_Learning_Appr:
                 # Forward current model
                 images, targets = images.to(self.device), targets.to(self.device)
 
-                outputs = self.model(images)
+                outputs, feats = self.model(images, return_features=True)
                 loss = self.criterion(t, outputs, targets)
-                hits_taw, hits_tag = self.calculate_metrics(outputs, targets)
+                hits_taw, hits_tag = self.classifier.classify(t, outputs, feats, targets)
 
-                hits_tag / len(targets)
+                # hits_tag / len(targets)
 
                 # Log
                 total_loss += loss.item() * len(targets)
@@ -608,23 +627,6 @@ class Inc_Learning_Appr:
                 total_num += len(targets)
         return total_loss / total_num, total_acc_taw / total_num, total_acc_tag / total_num
 
-    def calculate_metrics(self, outputs, targets):
-        """Contains the main Task-Aware and Task-Agnostic metrics"""
-        pred = torch.zeros_like(targets)
-        # Task-Aware Multi-Head
-        for m in range(len(pred)):
-            this_task = (self.model.task_cls.cumsum(0).to(self.device) <= targets[m]).sum()
-            pred[m] = outputs[this_task][m].argmax() + self.model.task_offset[this_task]
-        hits_taw = (pred == targets).float()
-        # Task-Agnostic Multi-Head
-        if self.multi_softmax:
-            outputs = [torch.nn.functional.log_softmax(output, dim=1) for output in outputs]
-            pred = torch.cat(outputs, dim=1).argmax(1)
-        else:
-            pred = torch.cat(outputs, dim=1).argmax(1)
-        hits_tag = (pred == targets).float()
-        return hits_taw, hits_tag
-        
     def criterion(self, t, outputs, targets):
         """Returns the loss value"""
         return torch.nn.functional.cross_entropy(outputs[t], targets - self.model.task_offset[t])

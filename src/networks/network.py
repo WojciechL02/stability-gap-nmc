@@ -6,7 +6,7 @@ from copy import deepcopy
 class LLL_Net(nn.Module):
     """Basic class for implementing networks"""
 
-    def __init__(self, model, remove_existing_head=False, head_init_mode=None, use_ssl_projector=False):
+    def __init__(self, model, remove_existing_head=False, head_init_mode=None):
         head_var = model.head_var
         assert type(head_var) == str
         assert not remove_existing_head or hasattr(model, head_var), \
@@ -19,7 +19,7 @@ class LLL_Net(nn.Module):
         self.head_init_mode = head_init_mode
         last_layer = getattr(self.model, head_var)
 
-        if remove_existing_head or use_ssl_projector:
+        if remove_existing_head:
             if type(last_layer) == nn.Sequential:
                 self.out_size = last_layer[-1].in_features
                 # strips off last linear layer of classifier
@@ -32,15 +32,6 @@ class LLL_Net(nn.Module):
                 setattr(self.model, head_var, nn.Sequential())
         else:
             self.out_size = last_layer.out_features
-        
-        self.ssl_projector = None
-        if use_ssl_projector:
-            self.ssl_projector = nn.Sequential(
-                nn.Linear(self.out_size, 2 * self.out_size),
-                nn.BatchNorm1d(2 * self.out_size),
-                nn.ReLU(),
-                nn.Linear(2 * self.out_size, self.out_size)
-            )
 
         self.primary_state_dict = deepcopy(self.model.state_dict())
 
@@ -77,16 +68,10 @@ class LLL_Net(nn.Module):
         """
         x = self.model(x)
         assert (len(self.heads) > 0), "Cannot access any head"
-        
-        if self.ssl_projector is not None:
-            # x = torch.nn.functional.normalize(x, dim=1)
-            y = self.ssl_projector(x)
-            y = torch.nn.functional.normalize(y, dim=1)
-        else:
-            y = []
-            for head in self.heads:
-                y.append(head(x))
 
+        y = []
+        for head in self.heads:
+            y.append(head(x))
         if return_features:
             return y, x
         else:
