@@ -18,6 +18,7 @@ head_init=${13}
 stop_at_task=${14:-0}
 exemplars=${15:-20}
 bsz=${16:-128}
+classifier=${17}
 
 if [ ${wu_epochs} -gt 0 ]; then
   exp_name="t${num_tasks}s20_wu_hz_wd:${wu_wd}_m:${exemplars}"
@@ -48,6 +49,7 @@ if [ ${wu_epochs} -gt 0 ]; then
     --wu-scheduler cosine \
     --head-init-mode ${head_init} \
     --pretrained \
+    --classifier ${classifier}
     --slca
 else
   exp_name="t${num_tasks}s20_hz_m:${exemplars}"
@@ -73,6 +75,7 @@ else
     --approach finetuning \
     --num-exemplars-per-class ${exemplars} \
     --head-init-mode ${head_init} \
+    --classifier ${classifier} \
     --pretrained \
     --slca
 fi

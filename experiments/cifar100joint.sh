@@ -14,7 +14,7 @@ num_epochs=100
 lr=0.1
 bsz=128
 head_init=zeros
-exemplars=2000
+exemplars=5000
 
 for seed in 0 1 2; do
   ./experiments/ft.sh 0 ${seed} ${tag} ${dataset} 10 10 ${network} ${num_epochs} 0 0 0.0 ${lr} ${head_init} ${stop_at_task} ${exemplars} ${bsz} linear &
@@ -27,21 +27,11 @@ done
 wait
 
 for seed in 0 1 2; do
-  ./experiments/ft_oracle.sh 0 ${seed} ${tag} ${dataset} 10 10 ${network} ${num_epochs} 0 0 0.0 ${lr} ${head_init} ${stop_at_task} ${exemplars} ${bsz} nmc &
-done
-wait
-
-for seed in 0 1 2; do
   ./experiments/ft.sh 0 ${seed} ${tag} ${dataset} 5 20 ${network} ${num_epochs} 0 0 0.0 ${lr} ${head_init} ${stop_at_task} ${exemplars} ${bsz} linear &
 done
 wait
 
 for seed in 0 1 2; do
   ./experiments/ft.sh 0 ${seed} ${tag} ${dataset} 5 20 ${network} ${num_epochs} 0 0 0.0 ${lr} ${head_init} ${stop_at_task} ${exemplars} ${bsz} nmc &
-done
-wait
-
-for seed in 0 1 2; do
-  ./experiments/ft_oracle.sh 0 ${seed} ${tag} ${dataset} 5 20 ${network} ${num_epochs} 0 0 0.0 ${lr} ${head_init} ${stop_at_task} ${exemplars} ${bsz} nmc &
 done
 wait
