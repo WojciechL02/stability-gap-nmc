@@ -8,7 +8,7 @@ Source code for the paper Exploring the Stability Gap in Continual Learning: The
 Wojciech Łapacz, Daniel Marczak, Filip Szatkowski, Tomasz Trzciński
 
 The paper was accepted to WACV 2025
-[arxiv](https://opensource.org/licenses/MIT).
+[arxiv](https://arxiv.org/abs/2411.04723).
 
 # Repository
 This repository is based on [FACIL](https://github.com/fszatkowski/cl-teacher-adaptation?tab=readme-ov-file). Please check `experiments` directory for the scripts to reproduce the results from the paper.
